@@ -1,0 +1,65 @@
+@import "tailwindcss";
+
+:root {
+  --bat-yellow: #FFD700;
+  --bg: #000000;
+  --surface: #0b0b0b;
+  --surface2: #111111;
+  --text: #ffffff;
+  --muted: #9ca3af;
+}
+
+/* ✅ overal echt zwart, geen witte randen */
+html,
+body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* ✅ standaard gele borders */
+.border {
+  border-color: var(--bat-yellow) !important;
+}
+
+/* ✅ grijze “kleine tekst” */
+.opacity-70,
+.opacity-60,
+.text-gray-500,
+.text-gray-400 {
+  color: var(--muted) !important;
+  opacity: 1 !important;
+}
+
+/* ✅ alles dat bg-white gebruikte (cards, containers) wordt donker + wit tekst
+   => shop wordt eindelijk zwart/zwart/zwart zoals jij wil */
+.bg-white {
+  background-color: var(--surface) !important;
+  color: var(--text) !important;
+}
+
+/* ✅ voor hover (subtiel) */
+.bg-white:hover {
+  background-color: var(--surface2) !important;
+}
+
+/* ✅ buttons/plus/min/qty: wit */
+button {
+  color: var(--text);
+}
+
+/* ✅ Inputs moeten WIT blijven (zoals je login juist is) */
+input,
+select,
+textarea {
+  background-color: #ffffff !important;
+  color: #111111 !important;
+  border: 1px solid #e5e7eb !important;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: #6b7280 !important;
+}

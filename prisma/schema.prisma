@@ -1,0 +1,114 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Admin {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  username     String @unique
+  passwordHash String
+}
+
+model Customer {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  snapchat String  @unique
+  username String?
+
+  personalCode   String? @unique
+  referralCode   String? @unique
+  referredByCode String?
+
+  passwordHash String?
+
+  orders  Order[]
+  invites Invite[]
+}
+
+model Invite {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  code String  @unique
+  used Boolean @default(false)
+
+  expiresAt DateTime
+
+  customerId String?
+  customer   Customer? @relation(fields: [customerId], references: [id])
+
+  @@index([expiresAt])
+  @@index([used])
+}
+
+model Product {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  name        String  @unique
+  description String?
+  priceCents  Int
+  isActive    Boolean @default(true)
+
+  stockQty Int @default(0)
+
+  // 🔑 Categorie als STRING (SQLite-compatibel)
+  // Verwachte waarden: "VAPES" | "KLEDIJ"
+  category String
+
+  orderItems OrderItem[]
+}
+
+model Order {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  snapchat     String
+  municipality String
+  deliveryDay  String
+  note         String?
+
+  totalCents  Int     @default(0)
+  isCompleted Boolean @default(false)
+
+  customerId String?
+  customer   Customer? @relation(fields: [customerId], references: [id])
+
+  items OrderItem[]
+
+  @@index([municipality])
+  @@index([deliveryDay])
+  @@index([isCompleted])
+  @@index([createdAt])
+}
+
+model OrderItem {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  orderId   String
+  productId String
+
+  quantity   Int
+  priceCents Int
+
+  order   Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id])
+
+  @@unique([orderId, productId])
+  @@index([orderId])
+  @@index([productId])
+}
