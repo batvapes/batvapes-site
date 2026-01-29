@@ -63,8 +63,6 @@ model Product {
 
   stockQty Int @default(0)
 
-  // 🔑 Categorie als STRING (SQLite-compatibel)
-  // Verwachte waarden: "VAPES" | "KLEDIJ"
   category String
 
   orderItems OrderItem[]
@@ -78,7 +76,11 @@ model Order {
   snapchat     String
   municipality String
   deliveryDay  String
-  note         String?
+
+  // ✅ DEFAULT toegevoegd zodat db push geen reset meer nodig heeft
+  deliveryStartMinutes Int @default(0)
+
+  note String?
 
   totalCents  Int     @default(0)
   isCompleted Boolean @default(false)
@@ -86,10 +88,14 @@ model Order {
   customerId String?
   customer   Customer? @relation(fields: [customerId], references: [id])
 
+  deliveryStopId String?
+  deliveryStop   DeliveryStop? @relation(fields: [deliveryStopId], references: [id])
+
   items OrderItem[]
 
   @@index([municipality])
   @@index([deliveryDay])
+  @@index([deliveryStartMinutes])
   @@index([isCompleted])
   @@index([createdAt])
 }
@@ -111,4 +117,38 @@ model OrderItem {
   @@unique([orderId, productId])
   @@index([orderId])
   @@index([productId])
+}
+
+model TravelTime {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  fromMunicipality String
+  toMunicipality   String
+  minutes          Int
+
+  @@unique([fromMunicipality, toMunicipality])
+  @@index([fromMunicipality])
+  @@index([toMunicipality])
+}
+
+model DeliveryStop {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  deliveryDay  String
+  startMinutes Int
+  municipality String
+
+  capacityMax  Int @default(3)
+  capacityUsed Int @default(0)
+
+  orders Order[]
+
+  @@unique([deliveryDay, municipality, startMinutes])
+  @@index([deliveryDay])
+  @@index([startMinutes])
+  @@index([municipality])
 }
