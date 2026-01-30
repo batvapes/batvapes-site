@@ -1,68 +1,66 @@
-import { NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
+import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
 
-const prisma = new PrismaClient();
+export const runtime = "nodejs";
 
 function makeReferralCode() {
-  // 6 chars, uppercase
   return Math.random().toString(36).slice(2, 8).toUpperCase();
 }
 
-export async function GET() {
+export async function POST(req: NextRequest) {
   try {
-    const customers = await prisma.customer.findMany({
-      orderBy: { createdAt: "desc" },
-    });
+    const body = (await req.json().catch(() => null)) as any;
 
-    return NextResponse.json({ success: true, customers });
-  } catch (error) {
-    console.error("Error fetching customers:", error);
-    return NextResponse.json(
-      { error: "Kon klanten niet ophalen" },
-      { status: 500 }
-    );
-  }
-}
+    // In jouw schema is dit "username" (niet fullName)
+    const username = (body?.username ?? body?.fullName ?? "").toString().trim();
+    const snapchat = (body?.snapchat ?? "").toString().trim();
+    const personalCode = (body?.personalCode ?? "").toString().trim();
 
-export async function POST(req: Request) {
-  try {
-    const body = await req.json();
-    const { fullName, snapchat, personalCode, referralCode } = body; // referralCode = code van referrer
-
-    if (!fullName || !snapchat || !personalCode || !referralCode) {
-      return NextResponse.json({ error: "Ontbrekende velden" }, { status: 400 });
+    if (!username || !snapchat || !personalCode) {
+      return NextResponse.json(
+        { error: "username, snapchat en personalCode zijn verplicht" },
+        { status: 400 }
+      );
     }
 
-    // check: bestaat die referrer code?
-    const referrer = await prisma.customer.findUnique({
-      where: { referralCode },
-    });
-
-    if (!referrer) {
-      return NextResponse.json({ error: "Ongeldige referral code" }, { status: 404 });
-    }
-
-    // genereer unieke referralCode voor de nieuwe klant
+    // unieke referral code maken
     let newCode = makeReferralCode();
-    for (let i = 0; i < 10; i++) {
-      const exists = await prisma.customer.findUnique({ where: { referralCode: newCode } });
+    for (let i = 0; i < 15; i++) {
+      const exists = await prisma.customer.findUnique({
+        where: { referralCode: newCode },
+        select: { id: true },
+      });
       if (!exists) break;
       newCode = makeReferralCode();
     }
 
+    const stillExists = await prisma.customer.findUnique({
+      where: { referralCode: newCode },
+      select: { id: true },
+    });
+
+    if (stillExists) {
+      return NextResponse.json(
+        { error: "Kon geen unieke referral code maken. Probeer opnieuw." },
+        { status: 500 }
+      );
+    }
+
     const customer = await prisma.customer.create({
       data: {
-        fullName,
+        username,
         snapchat,
         personalCode,
-        referralCode: newCode,      // UNIQUE voor deze klant
-        referredByCode: referralCode, // de code van de referrer
+        referralCode: newCode,
       },
     });
 
-    return NextResponse.json({ success: true, customer });
-  } catch (error) {
-    console.error("Error creating customer:", error);
-    return NextResponse.json({ error: "Server error" }, { status: 500 });
+    return NextResponse.json({ success: true, customer }, { status: 201 });
+  } catch (e) {
+    console.error("Create customer error:", e);
+    return NextResponse.json(
+      { error: "Internal server error" },
+      { status: 500 }
+    );
   }
 }
