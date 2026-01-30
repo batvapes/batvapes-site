@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { readCart, setQty, clearCart, type CartLine } from "@/lib/cartStorage";
 import GemeenteSelect from "@/app/components/GemeenteSelect";
 import DaySelect from "@/app/components/DaySelect";
+import TimeSlotSelect from "@/app/components/TimeSlotSelect";
 import { getDeliveryDateOptions, type DeliveryDateISO } from "@/lib/orderRules";
 
 type Product = {
@@ -25,9 +26,10 @@ export default function CartPage() {
   const [snapchatLocked, setSnapchatLocked] = useState(false);
 
   const [municipality, setMunicipality] = useState("");
-  const [deliveryDay, setDeliveryDay] = useState<DeliveryDateISO | "">(""); // ✅ belangrijk
-  const [note, setNote] = useState("");
+  const [deliveryDay, setDeliveryDay] = useState<DeliveryDateISO | "">("");
+  const [deliveryStartMinutes, setDeliveryStartMinutes] = useState<number | null>(null);
 
+  const [note, setNote] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
   function refreshCartFromStorage() {
@@ -38,29 +40,22 @@ export default function CartPage() {
     refreshCartFromStorage();
   }, []);
 
-  // ✅ FIX: deliveryDay automatisch invullen met eerst beschikbare dag (morgen)
   useEffect(() => {
     if (deliveryDay) return;
-
     const opts = getDeliveryDateOptions(new Date(), 21);
     const firstAvailable = opts.find((o) => !o.disabled)?.value;
-
-    if (firstAvailable) {
-      setDeliveryDay(firstAvailable);
-    }
+    if (firstAvailable) setDeliveryDay(firstAvailable);
   }, [deliveryDay]);
 
   useEffect(() => {
     (async () => {
       setLoading(true);
       try {
-        // product data voor prijs/naam/stock
         const pRes = await fetch("/api/products?all=1", { cache: "no-store" });
         const pData = await pRes.json().catch(() => ({}));
         const list = Array.isArray(pData?.products) ? pData.products : [];
         setProducts(list);
 
-        // snapchat auto invullen
         const me = await fetch("/api/auth/customer/me", {
           cache: "no-store",
           credentials: "include",
@@ -76,6 +71,11 @@ export default function CartPage() {
       }
     })();
   }, []);
+
+  // reset timeslot when day/municipality changes (TimeSlotSelect picks first available)
+  useEffect(() => {
+    setDeliveryStartMinutes(null);
+  }, [deliveryDay, municipality]);
 
   const byId = useMemo(() => new Map(products.map((p) => [p.id, p])), [products]);
 
@@ -109,11 +109,11 @@ export default function CartPage() {
   }
 
   async function placeOrder() {
-    // ✅ debug (mag je laten staan, helpt bij volgende issues)
-    // console.log({ snapchat, municipality, deliveryDay });
-
     if (!snapchat.trim() || !municipality.trim() || !deliveryDay) {
       return alert("Vul Snapchat, gemeente en dag in.");
+    }
+    if (deliveryStartMinutes === null) {
+      return alert("Kies een tijdslot.");
     }
     if (lines.length === 0) return alert("Je winkelmand is leeg.");
 
@@ -126,7 +126,8 @@ export default function CartPage() {
         body: JSON.stringify({
           snapchat: snapchat.trim(),
           municipality: municipality.trim(),
-          deliveryDay, // ✅ ISO date
+          deliveryDay,
+          deliveryStartMinutes,
           note: note?.trim() ? note.trim() : null,
           items: lines.map((l) => ({ productId: l.productId, quantity: l.quantity })),
         }),
@@ -239,6 +240,13 @@ export default function CartPage() {
               value={deliveryDay}
               onChange={(v) => setDeliveryDay(v)}
               daysAhead={21}
+            />
+
+            <TimeSlotSelect
+              deliveryDay={deliveryDay || ""}
+              municipality={municipality}
+              value={deliveryStartMinutes}
+              onChange={(v) => setDeliveryStartMinutes(v)}
             />
 
             <input

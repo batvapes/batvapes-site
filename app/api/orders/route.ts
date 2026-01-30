@@ -3,6 +3,11 @@ import { cookies } from "next/headers";
 import { prisma } from "@/lib/prisma";
 import { normalizeText } from "@/lib/orderConfig";
 import { isValidISODate, isDeliveryDateAllowed } from "@/lib/orderRules";
+import {
+  listAllSlots,
+  WINDOW_START_MINUTES,
+  SERVICE_MINUTES_PER_STOP,
+} from "@/lib/deliveryScheduler";
 
 type IncomingItem = {
   productId: string;
@@ -20,10 +25,10 @@ export async function POST(req: Request) {
     const snapchatRaw = body?.snapchat;
     const municipalityRaw = body?.municipality;
     const deliveryDayRaw = body?.deliveryDay;
+    const deliveryStartMinutesRaw = body?.deliveryStartMinutes;
     const noteRaw = body?.note ?? null;
     const itemsRaw = body?.items;
 
-    // ✅ basis validaties
     if (typeof snapchatRaw !== "string" || !snapchatRaw.trim()) {
       return badRequest("Ongeldige snapchat.");
     }
@@ -40,19 +45,26 @@ export async function POST(req: Request) {
     if (typeof deliveryDayRaw !== "string") {
       return badRequest("Ongeldige dag.");
     }
-    const deliveryDay = deliveryDayRaw.trim(); // ISO date: YYYY-MM-DD
-
+    const deliveryDay = deliveryDayRaw.trim(); // YYYY-MM-DD
     if (!isValidISODate(deliveryDay)) {
       return badRequest("Ongeldige dag.");
     }
     if (!isDeliveryDateAllowed(deliveryDay, new Date(), 21)) {
-      return badRequest(
-        "Je kan niet voor vandaag bestellen.",
-        "Bestellen kan enkel voor zaterdag/zondag en nooit voor vandaag."
-      );
+      return badRequest("Je kan niet voor vandaag bestellen.");
     }
 
-    // ✅ items validatie
+    if (!Number.isInteger(deliveryStartMinutesRaw)) {
+      return badRequest("Ongeldig tijdslot.");
+    }
+    const deliveryStartMinutes = Number(deliveryStartMinutesRaw);
+
+    // slot moet bestaan in window
+    const allowedSlots = new Set(listAllSlots(deliveryDay));
+    if (!allowedSlots.has(deliveryStartMinutes)) {
+      return badRequest("Tijdslot is niet toegelaten.");
+    }
+
+    // items
     if (!Array.isArray(itemsRaw) || itemsRaw.length === 0) {
       return badRequest("Je winkelmand is leeg.");
     }
@@ -68,7 +80,7 @@ export async function POST(req: Request) {
       return badRequest("Ongeldige items in winkelmand.");
     }
 
-    // combine duplicates (zelfde productId)
+    // merge duplicates
     const mergedMap = new Map<string, number>();
     for (const it of items) {
       mergedMap.set(it.productId, (mergedMap.get(it.productId) ?? 0) + it.quantity);
@@ -78,7 +90,7 @@ export async function POST(req: Request) {
       quantity,
     }));
 
-    // ✅ producten ophalen + prijzen + stock check
+    // products fetch + stock check
     const productIds = mergedItems.map((i) => i.productId);
     const products = await prisma.product.findMany({
       where: { id: { in: productIds } },
@@ -100,7 +112,6 @@ export async function POST(req: Request) {
       }
     }
 
-    // ✅ totaal berekenen + nested create items bouwen
     const itemsCreate = mergedItems.map((it) => {
       const p = productById.get(it.productId)!;
       return {
@@ -120,26 +131,117 @@ export async function POST(req: Request) {
         ? noteRaw.trim().slice(0, 200)
         : null;
 
-    // ✅ klant koppelen als cookie bestaat (past bij jouw auth flow)
     const cookieStore = await cookies();
     const customerId = cookieStore.get("customerId")?.value ?? null;
 
-    // ✅ transacties: order creëren + stock decrements
     const created = await prisma.$transaction(async (tx) => {
+      // 1) check bestaande stop op dat exact moment
+      const existingStop = await tx.deliveryStop.findUnique({
+        where: {
+          deliveryDay_municipality_startMinutes: {
+            deliveryDay,
+            municipality,
+            startMinutes: deliveryStartMinutes,
+          },
+        },
+        select: { id: true, capacityUsed: true, capacityMax: true },
+      });
+
+      if (existingStop) {
+        if (existingStop.capacityUsed >= existingStop.capacityMax) {
+          throw new Error("SLOT_FULL");
+        }
+
+        // reserve spot
+        await tx.deliveryStop.update({
+          where: { id: existingStop.id },
+          data: { capacityUsed: { increment: 1 } },
+        });
+
+        const order = await tx.order.create({
+          data: {
+            snapchat,
+            municipality,
+            deliveryDay,
+            deliveryStartMinutes,
+            note,
+            totalCents,
+            customerId,
+            deliveryStopId: existingStop.id,
+            items: { create: itemsCreate },
+          },
+          select: { id: true },
+        });
+
+        // stock decrement
+        for (const it of mergedItems) {
+          await tx.product.update({
+            where: { id: it.productId },
+            data: { stockQty: { decrement: it.quantity } },
+          });
+        }
+
+        return order;
+      }
+
+      // 2) nieuwe stop: append-only logica (na laatste stop)
+      const lastStop = await tx.deliveryStop.findFirst({
+        where: { deliveryDay },
+        orderBy: { startMinutes: "desc" },
+        select: { municipality: true, startMinutes: true },
+      });
+
+      let earliestNewStart = WINDOW_START_MINUTES;
+
+      if (lastStop) {
+        const travel = await tx.travelTime.findUnique({
+          where: {
+            fromMunicipality_toMunicipality: {
+              fromMunicipality: lastStop.municipality,
+              toMunicipality: municipality,
+            },
+          },
+          select: { minutes: true },
+        });
+
+        if (!travel) {
+          throw new Error(`TRAVELTIME_MISSING:${lastStop.municipality}->${municipality}`);
+        }
+
+        earliestNewStart = lastStop.startMinutes + SERVICE_MINUTES_PER_STOP + travel.minutes;
+      }
+
+      if (deliveryStartMinutes < earliestNewStart) {
+        throw new Error("SLOT_TOO_EARLY");
+      }
+
+      // create stop with 1 reserved
+      const stop = await tx.deliveryStop.create({
+        data: {
+          deliveryDay,
+          municipality,
+          startMinutes: deliveryStartMinutes,
+          capacityMax: 3,
+          capacityUsed: 1,
+        },
+        select: { id: true },
+      });
+
       const order = await tx.order.create({
         data: {
           snapchat,
           municipality,
-          deliveryDay, // store ISO date string
+          deliveryDay,
+          deliveryStartMinutes,
           note,
           totalCents,
           customerId,
+          deliveryStopId: stop.id,
           items: { create: itemsCreate },
         },
         select: { id: true },
       });
 
-      // stock verminderen
       for (const it of mergedItems) {
         await tx.product.update({
           where: { id: it.productId },
@@ -153,6 +255,17 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true, orderId: created.id }, { status: 201 });
   } catch (e: any) {
     const msg = typeof e?.message === "string" ? e.message : "Onbekende server fout";
+
+    if (msg === "SLOT_FULL") {
+      return badRequest("Dit tijdslot is volzet. Kies een ander slot.");
+    }
+    if (msg === "SLOT_TOO_EARLY") {
+      return badRequest("Dit tijdslot is te vroeg. Kies een later slot.");
+    }
+    if (msg.startsWith("TRAVELTIME_MISSING:")) {
+      return badRequest("Geen reistijd gevonden.", msg.replace("TRAVELTIME_MISSING:", ""));
+    }
+
     return NextResponse.json(
       { error: "Server error bij order plaatsen.", details: msg },
       { status: 500 }

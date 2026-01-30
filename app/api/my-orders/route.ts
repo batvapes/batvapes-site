@@ -11,13 +11,14 @@ export async function GET() {
   }
 
   const orders = await prisma.order.findMany({
-    where: { customerId }, // ✅ dit werkt nu omdat POST customerId opslaat
+    where: { customerId },
     orderBy: { createdAt: "desc" },
     select: {
       id: true,
       createdAt: true,
       municipality: true,
       deliveryDay: true,
+      deliveryStartMinutes: true,
       note: true,
       totalCents: true,
       isCompleted: true,

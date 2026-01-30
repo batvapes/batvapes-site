@@ -22,15 +22,14 @@ function normalizeCategory(raw: unknown): ProductCategory | null {
   const s = String(raw ?? "").trim().toUpperCase();
   if (s === "VAPES") return "VAPES";
   if (s === "KLEDIJ") return "KLEDIJ";
-  if (s === "CLOTHING") return "KLEDIJ"; // optioneel
+  if (s === "CLOTHING") return "KLEDIJ";
   return null;
 }
 
 export default function CategoryProductsPage() {
-  const params = useParams(); // ✅ dit update correct bij client navigatie
+  const params = useParams();
 
   const category = useMemo<ProductCategory | null>(() => {
-    // In Next.js kan params.category string of string[] zijn
     const raw = (params as any)?.category;
     const value = Array.isArray(raw) ? raw[0] : raw;
     return normalizeCategory(value);
@@ -39,13 +38,15 @@ export default function CategoryProductsPage() {
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(false);
 
-  // per product: gekozen aantal
+  // per product: gekozen aantal (nog NIET toegevoegd)
   const [picked, setPicked] = useState<Record<string, number>>({});
-  const [addedModal, setAddedModal] = useState<{ open: boolean; lastName?: string }>({
-    open: false,
-  });
 
-  // ✅ Load producten wanneer category geldig is
+  const [addedModal, setAddedModal] = useState<{
+    open: boolean;
+    countProducts?: number;
+    totalItems?: number;
+  }>({ open: false });
+
   useEffect(() => {
     if (!category) return;
 
@@ -81,15 +82,51 @@ export default function CategoryProductsPage() {
     });
   }
 
-  function commitAdd(p: Product) {
-    const qty = picked[p.id] ?? 0;
-    if (qty <= 0) return;
-    addToCart(p.id, qty);
-    setPicked((prev) => ({ ...prev, [p.id]: 0 }));
-    setAddedModal({ open: true, lastName: p.name });
+  const selection = useMemo(() => {
+    let countProducts = 0;
+    let totalItems = 0;
+    let totalCents = 0;
+
+    for (const p of visible) {
+      const qty = picked[p.id] ?? 0;
+      if (qty > 0) {
+        countProducts += 1;
+        totalItems += qty;
+        totalCents += qty * p.priceCents;
+      }
+    }
+
+    return { countProducts, totalItems, totalCents };
+  }, [visible, picked]);
+
+  function addAllToCart() {
+    // voeg enkel producten toe met qty > 0
+    let countProducts = 0;
+    let totalItems = 0;
+
+    for (const p of visible) {
+      const qty = picked[p.id] ?? 0;
+      if (qty > 0) {
+        addToCart(p.id, qty);
+        countProducts += 1;
+        totalItems += qty;
+      }
+    }
+
+    if (countProducts === 0) return;
+
+    // reset alle gekozen hoeveelheden
+    setPicked((prev) => {
+      const next = { ...prev };
+      for (const p of visible) {
+        if ((next[p.id] ?? 0) > 0) next[p.id] = 0;
+      }
+      return next;
+    });
+
+    setAddedModal({ open: true, countProducts, totalItems });
   }
 
-  // ✅ Als category ongeldig is: GEEN redirect meer → gewoon UI tonen
   if (!category) {
     return (
       <div className="mx-auto max-w-6xl p-4">
@@ -105,8 +142,8 @@ export default function CategoryProductsPage() {
   const currentLabel = CATEGORIES.find((c) => c.value === category)?.label ?? category;
 
   return (
-    <div className="mx-auto max-w-6xl p-4">
-      {/* TOP BAR IN PAGE */}
+    <div className="mx-auto max-w-6xl p-4 pb-28">
+      {/* TOP BAR */}
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <Link href="/shop" className="rounded-xl border px-4 py-2 font-bold bg-white">
           ← Categorieën
@@ -114,7 +151,6 @@ export default function CategoryProductsPage() {
 
         <div className="flex-1" />
 
-        {/* ✅ Switch category via Link (super stabiel) */}
         <div className="flex items-center gap-2">
           {CATEGORIES.map((c) => (
             <Link
@@ -138,6 +174,7 @@ export default function CategoryProductsPage() {
         <div className="rounded-xl border bg-white p-4 opacity-70">Geen producten in deze categorie.</div>
       ) : null}
 
+      {/* PRODUCT LIST */}
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
         {visible.map((p) => {
           const qty = picked[p.id] ?? 0;
@@ -172,23 +209,48 @@ export default function CategoryProductsPage() {
                   +
                 </button>
 
-                <button
-                  onClick={() => commitAdd(p)}
-                  disabled={out || qty <= 0}
-                  className="ml-auto rounded-xl bg-black px-4 py-2 font-bold text-white disabled:opacity-60"
-                >
-                  Toevoegen aan winkelmand
-                </button>
+                {out ? (
+                  <div className="ml-auto rounded-lg border px-3 py-2 text-sm font-semibold opacity-70">
+                    Uitverkocht
+                  </div>
+                ) : (
+                  <div className="ml-auto text-sm opacity-70">
+                    Subtotaal: <b>{eur(qty * p.priceCents)}</b>
+                  </div>
+                )}
               </div>
-
-              {out ? (
-                <div className="mt-3 rounded-lg border p-3 text-sm font-semibold opacity-70">
-                  Uitverkocht
-                </div>
-              ) : null}
             </div>
           );
         })}
+      </div>
+
+      {/* STICKY BOTTOM BAR (1 knop voor alles) */}
+      <div className="fixed bottom-0 left-0 right-0 z-[60] border-t bg-white">
+        <div className="mx-auto max-w-6xl p-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
+          <div className="text-sm">
+            <div className="font-bold">
+              Geselecteerd: {selection.countProducts} producten • {selection.totalItems} stuks
+            </div>
+            <div className="opacity-70">Totaal: {eur(selection.totalCents)}</div>
+          </div>
+
+          <div className="flex-1" />
+
+          <button
+            onClick={addAllToCart}
+            disabled={selection.totalItems <= 0}
+            className="rounded-xl bg-black px-5 py-3 font-bold text-white disabled:opacity-60"
+          >
+            Alles toevoegen aan winkelmand
+          </button>
+
+          <button
+            onClick={() => (window.location.href = "/cart")}
+            className="rounded-xl border px-5 py-3 font-bold"
+          >
+            Naar winkelmand
+          </button>
+        </div>
       </div>
 
       {/* MODAL */}
@@ -202,7 +264,7 @@ export default function CategoryProductsPage() {
           <div className="absolute left-1/2 top-1/2 w-[92%] max-w-sm -translate-x-1/2 -translate-y-1/2 rounded-2xl bg-white p-5 shadow-xl">
             <div className="text-lg font-black">Toegevoegd ✅</div>
             <div className="mt-2 text-sm opacity-80">
-              {addedModal.lastName ? <b>{addedModal.lastName}</b> : "Product"} zit in je winkelmand.
+              <b>{addedModal.countProducts ?? 0}</b> producten toegevoegd • <b>{addedModal.totalItems ?? 0}</b> stuks.
             </div>
 
             <div className="mt-4 grid grid-cols-1 gap-2">
