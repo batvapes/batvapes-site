@@ -3,12 +3,14 @@ import { prisma } from "@/lib/prisma";
 
 export const runtime = "nodejs";
 
-export async function POST(
-  req: NextRequest,
-  { params }: { params: { code: string } }
-) {
+type RouteContext = {
+  params: Promise<{ code: string }>;
+};
+
+export async function POST(req: NextRequest, context: RouteContext) {
   try {
-    const referralCode = (params?.code ?? "").toString().trim().toUpperCase();
+    const { code } = await context.params;
+    const referralCode = (code ?? "").toString().trim().toUpperCase();
 
     if (!referralCode) {
       return NextResponse.json(
@@ -19,7 +21,7 @@ export async function POST(
 
     const body = (await req.json().catch(() => null)) as any;
 
-    // In jouw Prisma schema heet dit veld "username", niet "fullName"
+    // In jouw schema heet het "username" (en je fallbackt eventueel op fullName)
     const username = (body?.username ?? body?.fullName ?? "")
       .toString()
       .trim();
@@ -34,7 +36,6 @@ export async function POST(
       );
     }
 
-    // Bestaat referrer?
     const referrer = await prisma.customer.findUnique({
       where: { referralCode },
       select: { id: true, referralCode: true },
@@ -47,7 +48,6 @@ export async function POST(
       );
     }
 
-    // Maak unieke referral code voor nieuwe klant
     const makeReferralCode = () =>
       Math.random().toString(36).slice(2, 8).toUpperCase();
 
