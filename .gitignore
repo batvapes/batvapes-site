@@ -31,6 +31,10 @@ app/generated/prisma/
 prisma/generated/
 prisma/migrations/
 
+# Local SQLite databases (NOOIT committen)
+prisma/dev.db
+prisma/*.db
+
 # ================================
 # Logs & Debug
 # ================================
