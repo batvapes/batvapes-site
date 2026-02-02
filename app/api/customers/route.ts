@@ -1,31 +1,61 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
-export const runtime = "nodejs";
+// GET /api/customers  -> lijst klanten (admin dashboard)
+export async function GET() {
+  try {
+    const customers = await prisma.customer.findMany({
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true,
+        createdAt: true,
+        updatedAt: true,
+        snapchat: true,
+        username: true,          // als je schema dit heeft
+        personalCode: true,
+        referralCode: true,
+        referredByCode: true,
+      },
+    });
 
-function makeReferralCode() {
-  return Math.random().toString(36).slice(2, 8).toUpperCase();
+    return NextResponse.json({ success: true, customers });
+  } catch (error) {
+    console.error("Error fetching customers:", error);
+    return NextResponse.json({ error: "Kon klanten niet ophalen" }, { status: 500 });
+  }
 }
 
-export async function POST(req: NextRequest) {
+// (optioneel) POST blijft bestaan als je dit nog gebruikt ergens
+export async function POST(req: Request) {
   try {
-    const body = (await req.json().catch(() => null)) as any;
+    const body = await req.json();
 
-    // In jouw schema is dit "username" (niet fullName)
-    const username = (body?.username ?? body?.fullName ?? "").toString().trim();
-    const snapchat = (body?.snapchat ?? "").toString().trim();
-    const personalCode = (body?.personalCode ?? "").toString().trim();
+    // we supporten beide namen: username of fullName (backward compatible)
+    const username = (body.username ?? body.fullName ?? "").toString().trim();
+    const snapchat = (body.snapchat ?? "").toString().trim();
+    const personalCode = (body.personalCode ?? "").toString().trim();
+    const referralCode = (body.referralCode ?? "").toString().trim();
 
-    if (!username || !snapchat || !personalCode) {
-      return NextResponse.json(
-        { error: "username, snapchat en personalCode zijn verplicht" },
-        { status: 400 }
-      );
+    if (!username || !snapchat || !personalCode || !referralCode) {
+      return NextResponse.json({ error: "Ontbrekende velden" }, { status: 400 });
     }
 
-    // unieke referral code maken
+    // check: bestaat de referrer code?
+    const referrer = await prisma.customer.findUnique({
+      where: { referralCode },
+      select: { id: true },
+    });
+
+    if (!referrer) {
+      return NextResponse.json({ error: "Ongeldige referral code" }, { status: 404 });
+    }
+
+    // maak simpele code generator
+    const makeReferralCode = () => Math.random().toString(36).slice(2, 8).toUpperCase();
+
+    // genereer unieke referralCode voor nieuwe klant
     let newCode = makeReferralCode();
-    for (let i = 0; i < 15; i++) {
+    for (let i = 0; i < 20; i++) {
       const exists = await prisma.customer.findUnique({
         where: { referralCode: newCode },
         select: { id: true },
@@ -34,33 +64,29 @@ export async function POST(req: NextRequest) {
       newCode = makeReferralCode();
     }
 
-    const stillExists = await prisma.customer.findUnique({
-      where: { referralCode: newCode },
-      select: { id: true },
-    });
-
-    if (stillExists) {
-      return NextResponse.json(
-        { error: "Kon geen unieke referral code maken. Probeer opnieuw." },
-        { status: 500 }
-      );
-    }
-
     const customer = await prisma.customer.create({
       data: {
         username,
         snapchat,
         personalCode,
         referralCode: newCode,
+        referredByCode: referralCode,
+      },
+      select: {
+        id: true,
+        createdAt: true,
+        updatedAt: true,
+        snapchat: true,
+        username: true,
+        personalCode: true,
+        referralCode: true,
+        referredByCode: true,
       },
     });
 
-    return NextResponse.json({ success: true, customer }, { status: 201 });
-  } catch (e) {
-    console.error("Create customer error:", e);
-    return NextResponse.json(
-      { error: "Internal server error" },
-      { status: 500 }
-    );
+    return NextResponse.json({ success: true, customer });
+  } catch (error) {
+    console.error("Error creating customer:", error);
+    return NextResponse.json({ error: "Server error" }, { status: 500 });
   }
 }
